@@ -1,1 +1,3 @@
 # multisec
+Multi-Secret Sharing
+
