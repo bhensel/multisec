@@ -32,8 +32,8 @@ void SHA1Update(
     );
 
 void SHA1Final(
-    unsigned char digest[20],
-    SHA1_CTX * context
+    SHA1_CTX * context,
+    unsigned char digest[20]
     );
 
 void SHA1(

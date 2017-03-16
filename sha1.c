@@ -229,8 +229,8 @@ void SHA1Update(
 /* Add padding and return the message digest. */
 
 void SHA1Final(
-    unsigned char digest[20],
-    SHA1_CTX * context
+    SHA1_CTX * context,
+    unsigned char digest[20]
 )
 {
     unsigned i;
@@ -290,7 +290,7 @@ void SHA1(
     SHA1Init(&ctx);
     for (ii=0; ii<len; ii+=1)
         SHA1Update(&ctx, (const unsigned char*)str + ii, 1);
-    SHA1Final((unsigned char *)hash_out, &ctx);
+    SHA1Final( &ctx, (unsigned char *)hash_out);
     hash_out[20] = '\0';
 }
 
