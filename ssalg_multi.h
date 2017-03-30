@@ -1,5 +1,5 @@
 #include "remicss/ssalg.h"
-
+#define SECRETS 100
 
 //copied from ssalg_dup.h
 //should be a field here...probably.

@@ -139,6 +139,29 @@ static void bytes_convert(gf257_element_t* el, uint8_t *buf)
 
 }
 
+//simplistic selection sort.
+static void sort(gf257_element_t* rands, int n)
+{
+	int q, w, temp, min, ind;
+	for(q = 0; q < n; q++)
+	{
+		min = rands[q].contents;
+		ind = q;
+		for(w = q; w < n; w++)
+		{
+			if(rands[w].contents < min)
+			{
+				min = rands[w].contents;
+				ind = w;
+			}
+		}
+		temp = rands[q].contents;
+		rands[q].contents = min;
+		rands[ind].contents = temp;
+
+	}
+}
+
 static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size_t len, uint8_t *const *out, size_t *outlen)
 {
 
@@ -146,10 +169,44 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 
 	element_t** yCords = calloc((this->n)+len, sizeof(yCords[0]));
 
-	gf257_element_t* rands = calloc((this->n)*2, sizeof(gf257_element_t));
-	unique_rand(rands, (this->n)*2, len);
 
-	int counter;
+	//rands needs to be Us and Ds 
+	//contains uuuuddddddd for however many ds and us.  
+	gf257_element_t* rands = calloc((this->n)+len, sizeof(gf257_element_t));
+	unique_rand(rands, (this->n), len);
+
+	//sort the U's (this should make a few things easier.)
+	sort(rands, this->n);
+	/*
+	int debug;
+	for(debug = 0; debug < this->n; debug++)
+	{
+		printf("%d \n",rands[debug].contents);
+	}
+	*/
+
+
+	//load the ds into rand,
+	unsigned dval, check;
+	check = 0;
+	for (dval = 0; dval < len; dval++)
+	{
+		if(dval + len < rands[check].contents)
+		{
+			gf257_init(&rands[(this->n)+dval]);
+			rands[(this->n)+dval].contents = dval+len;
+		}
+		else
+		{
+			check++;
+		}
+	}
+
+	gf257_element_t* shadows = calloc((this->n), sizeof(gf257_element_t));
+	unique_rand(shadows, (this->n), 0);
+
+
+	unsigned counter;
 	for(counter = 0; counter<len; counter++)
 	{
 		//all these temps go unfreed.  Fix eventually
@@ -187,7 +244,7 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 		SHA1Update(&hash, Rbuf, numBytes);
 
 		//make Si a buffer
-		gf257_element_t S = rands[i];
+		gf257_element_t S = shadows[i];
 		uint8_t Sbuf[2];
 
 		numBytes = buf_convert(&S, Sbuf);
@@ -204,61 +261,105 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 
 		//turn digest into an element.
 		bytes_convert(&hashed, digest);
+		printf("%d\n",hashed.contents);
 
 		//load coords.
 		gf257_element_t* temp = malloc(sizeof(gf257_element_t));
 		gf257_init(temp);
-		temp->contents = rands[i+(this->n)].contents; //Ui
+		temp->contents = rands[i].contents; //Ui
+		printf("%d\n", rands[i].contents);
 		xCords[counter+i] = &temp->super;
 
-		gf257_init(temp);
-		temp->contents = hashed.contents;
-		yCords[counter+i] = &temp->super;
+		gf257_element_t* temp2 = malloc(sizeof(gf257_element_t));
+		gf257_init(temp2);
+		temp2->contents = hashed.contents;
+		yCords[counter+i] = &temp2->super;
 
 	}
-
-
 
 	poly_t* polynomial;
 
 	polynomial = interpolate(xCords, yCords, counter+i);
-	//hi
+	counter = counter+i;
 
+	//debugging code start
+	printf("One round polynomial: \n");
+	for(i = 0; i <= polynomial->degree; i++)
+	{
+		printf("%dx^%d  ", ((gf257_element_t*)polynomial->coeffs[i])->contents, i);
+	}
+	printf("\n");
+
+	gf257_element_t* toEval = malloc(sizeof(gf257_element_t));
+	gf257_init(toEval);
+	gf257_element_t* result;
+
+	printf("Sanity check: \n");
+	for(i = 0; i < 5; i++)
+	{
+		toEval->contents = i;
+		result = (gf257_element_t*) eval_poly(polynomial, (element_t*) toEval);
+		printf("%c", result->contents);
+	}
+	printf("\n");
+	printf("\n");
+
+	free(toEval);
+	//debugginh code stop
 
 
 	//load the published values into out. 
-	int j, k; 
-	memcpy(out[0], &R.contents, sizeof(R.contents));
-	outlen[0] += sizeof(R.contents);
+	unsigned j;
+	int k; 
+	size_t bufsize;
+	uint8_t dumBuf[2];
 
+	bufsize = buf_convert(&R, dumBuf);
+	memcpy(out[0], &R.contents, bufsize);
+	outlen[0] += bufsize;
+
+	//WARNING: possible error with 255/256 numbers as contents,
+	//ask Dr. Pohly,
 	for(k = 0; k < (this->n); k++)
 	{
 		//load s and u
-		memcpy(out[k] + outlen[k], &rands[k].contents, sizeof(rands[k].contents));
-		outlen[k] += sizeof(rands[k].contents);
-		memcpy(out[k] + outlen[k], &rands[k+this->n].contents, sizeof(rands[k+this->n].contents));
-		outlen[k] += sizeof(rands[k+this->n].contents);
+		bufsize = buf_convert(&shadows[k], dumBuf);
+		memcpy(out[k] + outlen[k], &shadows[k].contents, bufsize);
+		outlen[k] += bufsize;
+		printf("%d\n", rands[k].contents);
+		bufsize = buf_convert(&rands[k], dumBuf);
+		memcpy(out[k] + outlen[k], &rands[k].contents, bufsize);
+		outlen[k] += bufsize;
 	}
 
-	gf257_element_t d;
-	gf257_init(&d);
-	d.contents = 1 + this->n;
+	gf257_element_t* d;
 
 	for (j = 0; j < (len); j++)
 	{
 		int ch = (j+1)%this->n;
 		//load evaluated points
-		eval_poly(polynomial, (element_t*) &d);
+		printf("%d\n", rands[(this->n)+j].contents);
+		d = (gf257_element_t*) eval_poly(polynomial, (element_t*) &rands[(this->n)+j]);
+		printf("%d\n", d->contents);
 		//starting with channel 1 
-		memcpy(out[ch] + outlen[ch], &d.contents, sizeof(d.contents));
-		outlen[ch] += sizeof(d.contents);
+		bufsize = buf_convert(d, dumBuf);
+		memcpy(out[ch] + outlen[ch], &d->contents, bufsize);
+		outlen[ch] += bufsize;
 
 	}
 
-	free(polynomial);
+	poly_free(polynomial);
 	free(rands);
+	free(shadows);
+	for(i = 0; i<counter; i++)
+	{
+		free(xCords[i]);
+		free(yCords[i]);
+	}
+	//elements need to be freed first
 	free(xCords);
 	free(yCords);
+	free(d);
 
 }
 
@@ -287,12 +388,12 @@ static int ssalg_multi_split(struct ssalg *super, const uint8_t *buf, size_t len
 		shares[i]->len = 0;
 	}
 
-	for(offset = 0; offset < len; offset+= 200)
+	for(offset = 0; offset < len; offset+= SECRETS)
 	{
 		for(i = 0; i< this->n; i++)
 			outlen[i] = 0;
 
-		length = len - offset < 200? len-offset: 200;
+		length = len - offset < SECRETS? len-offset: SECRETS;
 		one_round(this, buf + offset, length, out, outlen);
 
 		//move out[i] forward for the next pass
@@ -316,6 +417,40 @@ static int ssalg_multi_split(struct ssalg *super, const uint8_t *buf, size_t len
 //Required by ssalg.h.  Currently in dummy form.
 static ssize_t ssalg_multi_recombine(struct ssalg *super, uint8_t *buf, size_t len, struct ss_packet **shares)
 {
+	/*
+	gf257_element_t* xCords[len+(this->n)];
+	gf257_element_t* yCords[len+(this->n)];
+
+	gf257_element_t R;
+	gf257_init(&R);
+
+	int i;
+	//recreate the pairs of (ui, f(r, si))
+
+
+
+	//recreate the pairs of ds and h(ds)
+	int uVal;
+	for(i = 0; i < len; i++)
+	{
+
+	}
+
+	poly_t* interpt;
+
+	interpt = interpolate((element_t**) xCords, (element_t**) yCords, len+(this->n));
+
+	//load the decoded secrets into buf
+	gf257_element_t* result;
+	gf257_element_t* toEval = malloc(sizeof(gf257_element_t));
+	gf257_init(toEval);
+	for (i = 0; i < len; i++)
+	{
+		toEval->contents = i;
+		result = eval_poly(interpt, (element_t*) toEval);
+	}
+	*/
+
 	return 0;
 }
 
