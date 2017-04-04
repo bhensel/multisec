@@ -120,7 +120,7 @@ static size_t buf_convert(gf257_element_t* el, uint8_t *buf)
 }
 
 //buf should always have a length of at least two.
-static void bytes_convert(gf257_element_t* el, uint8_t *buf)
+static size_t bytes_convert(gf257_element_t* el, uint8_t *buf)
 {
 	if(buf[0] == 255)
 	{
@@ -132,9 +132,12 @@ static void bytes_convert(gf257_element_t* el, uint8_t *buf)
 		{
 			el->contents = 256;
 		}
+		return 2;
 	}
 	else{
 		el->contents = buf[0];
+		return 1;
+
 	}
 
 }
@@ -261,13 +264,16 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 
 		//turn digest into an element.
 		bytes_convert(&hashed, digest);
-		printf("%d\n",hashed.contents);
+
+		//printf("%d\n",hashed.contents);
 
 		//load coords.
 		gf257_element_t* temp = malloc(sizeof(gf257_element_t));
 		gf257_init(temp);
 		temp->contents = rands[i].contents; //Ui
-		printf("%d\n", rands[i].contents);
+
+		//printf("%d\n", rands[i].contents);
+		
 		xCords[counter+i] = &temp->super;
 
 		gf257_element_t* temp2 = malloc(sizeof(gf257_element_t));
@@ -283,6 +289,7 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 	counter = counter+i;
 
 	//debugging code start
+	/*
 	printf("One round polynomial: \n");
 	for(i = 0; i <= polynomial->degree; i++)
 	{
@@ -305,6 +312,7 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 	printf("\n");
 
 	free(toEval);
+	*/
 	//debugginh code stop
 
 
@@ -324,11 +332,11 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 	{
 		//load s and u
 		bufsize = buf_convert(&shadows[k], dumBuf);
-		memcpy(out[k] + outlen[k], &shadows[k].contents, bufsize);
+		memcpy(out[k] + outlen[k], dumBuf, bufsize);
 		outlen[k] += bufsize;
 		printf("%d\n", rands[k].contents);
 		bufsize = buf_convert(&rands[k], dumBuf);
-		memcpy(out[k] + outlen[k], &rands[k].contents, bufsize);
+		memcpy(out[k] + outlen[k], dumBuf, bufsize);
 		outlen[k] += bufsize;
 	}
 
@@ -343,7 +351,7 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 		printf("%d\n", d->contents);
 		//starting with channel 1 
 		bufsize = buf_convert(d, dumBuf);
-		memcpy(out[ch] + outlen[ch], &d->contents, bufsize);
+		memcpy(out[ch] + outlen[ch], dumBuf, bufsize);
 		outlen[ch] += bufsize;
 
 	}
@@ -411,37 +419,110 @@ static int ssalg_multi_split(struct ssalg *super, const uint8_t *buf, size_t len
 	return 0;
 }
 
-
-
-
-//Required by ssalg.h.  Currently in dummy form.
-static ssize_t ssalg_multi_recombine(struct ssalg *super, uint8_t *buf, size_t len, struct ss_packet **shares)
+//outlen keeps track of we are currently looking in shares
+static int one_recombine(const struct ssalg *super, uint8_t *buf, size_t bufloc, size_t len, size_t *inlen, struct ss_packet **shares)
 {
-	/*
+
+	const struct ssalg_multi *this = (const struct ssalg_multi *) super;
+
 	gf257_element_t* xCords[len+(this->n)];
 	gf257_element_t* yCords[len+(this->n)];
 
 	gf257_element_t R;
 	gf257_init(&R);
+	inlen[0] += bytes_convert(&R, shares[0]->data[inlen[0]]);
 
-	int i;
+
+	int i, j, counter;
+	counter = 0; //index into x and y cords.
+
+
+	gf257_element_t result;
+	gf257_init(&result);
+
 	//recreate the pairs of (ui, f(r, si))
+	for(i=0; i<this->n; i++)
+	{
+		uint8_t dumBuf[2];
+		SHA1_CTX hash;
+		SHA1Init(&hash);
+		size_t numBytes;
 
+		//get the s and u, compute the shadow and load the points. 
+		numBytes = bytes_convert(&result, shares[i]->data[inlen[i]]);
 
+		//load the s
+		SHA1Update(&hash, shares[i]->data[inlen[i]], numBytes);
+		inlen[i] += numBytes;
+
+		numBytes = buf_convert(&R, dumBuf);
+		SHA1Update(&hash, dumBuf, numBytes);
+
+		//load Ui into result
+		inlen[i] += bytes_convert(&result, shares[i]->data[inlen[i]]);
+		xCords[counter] = malloc(sizeof(gf257_element_t));
+		gf257_init(xCords[counter]);
+		xCords[counter]->contents = result.contents;
+
+		//compute the hash
+		uint8_t digest[20];
+		SHA1Final(&hash, digest);
+
+		gf257_element_t hashed;
+		gf257_init(&hashed);
+
+		//turn digest into an element.
+		bytes_convert(&hashed, digest);
+
+		yCords[counter] = malloc(sizeof(gf257_element_t));
+		gf257_init(yCords[counter]);
+		yCords[counter]->contents = hashed.contents;
+
+		counter++;
+	}
 
 	//recreate the pairs of ds and h(ds)
-	int uVal;
+	int uCheck, channel, d;
+	uCheck = 0;
+	d = 0; //d manages the gaps created by the fact ds and us cannot overlap
+	// thus the d value will be i+len+d
 	for(i = 0; i < len; i++)
 	{
+		channel = (i+1)%(this->n);
 
+		//load d
+		xCords[counter] = malloc(sizeof(gf257_element_t));
+		gf257_init(xCords[counter]);
+		//make sure d not a u
+		if((i+len+d)<xCords[uCheck]->contents)
+			xCords[counter]->contents = i+len+d;
+		else
+		{
+			//in case successive us
+			while((i+len+d)==xCords[uCheck]->contents)
+			{
+				d++;
+				uCheck++;
+			}
+			xCords[counter]->contents = i+len+d;
+		}
+		
+
+		//load h(d)
+		inlen[channel] += bytes_convert(&result, shares[channel]->data[inlen[channel]]);
+		yCords[counter] = malloc(sizeof(gf257_element_t));
+		gf257_init(yCords[counter]);
+		yCords[counter]->contents = result.contents;
+
+		counter++;
 	}
 
 	poly_t* interpt;
 
 	interpt = interpolate((element_t**) xCords, (element_t**) yCords, len+(this->n));
 
+	/*
 	//load the decoded secrets into buf
-	gf257_element_t* result;
 	gf257_element_t* toEval = malloc(sizeof(gf257_element_t));
 	gf257_init(toEval);
 	for (i = 0; i < len; i++)
@@ -450,16 +531,38 @@ static ssize_t ssalg_multi_recombine(struct ssalg *super, uint8_t *buf, size_t l
 		result = eval_poly(interpt, (element_t*) toEval);
 	}
 	*/
+	
 
 	return 0;
 }
 
-/*
-static void one_recombine(struct ssalg *super, )
-{
 
+
+//Required by ssalg.h.  Currently in dummy form.
+static ssize_t ssalg_multi_recombine(struct ssalg *super, uint8_t *buf, size_t len, struct ss_packet **shares)
+{
+	const struct ssalg_multi *this = (const struct ssalg_multi *) super;
+
+	int offset, i; 
+	size_t bufloc, length; //location in buf
+	size_t inlen[this->n]; //location on each channel
+	bufloc = 0;
+
+	for(offset = 0; offset < len; offset+= SECRETS)
+	{
+		for(i = 0; i< this->n; i++)
+			inlen[i] = 0;
+
+		//length is the number of secrets involved in the next decoding round
+		length = len - offset < SECRETS? len-offset: SECRETS;
+
+		one_recombine(this, buf, bufloc, length, inlen, shares);
+
+	}
+
+	return 0;
 }
-*/
+
 
 
 //Required by ssalg.h, based on ssalg_xor.
