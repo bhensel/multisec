@@ -46,40 +46,6 @@ static int ssalg_multi_get_k(const struct ssalg *super)
 
 //helper method, returns n unique random elements of a field.
 //bound provides a lower limit for the number.
-static void unique_rand2(gf257_element_t** rands, int n, int bound)
-{
-	//counter for the loop.
-	int i = 0;
-	//for the random elements.
-	gf257_element_t* result = malloc(sizeof(gf257_element_t));
-	gf257_init(result);
-
-	while(i < n)
-	{
-		gf257_randelement((element_t*) result);
-		if(result->contents > bound)
-		{
-			int j;
-			int present = 0;
-			for (j = 0; j < i; j++)
-			{
-				if(rands[j]->contents == result->contents)
-				{
-					present = 1;
-				}
-			}
-
-			if(!present)
-			{
-				rands[i] = malloc(sizeof(gf257_element_t));
-				gf257_init(rands[i]);
-				rands[i]->contents = result->contents;
-				i++;
-			}
-		}
-	}
-}
-
 static void unique_rand(gf257_element_t *rands, int n, int lbound)
 {
 	int i = 0;
@@ -274,22 +240,29 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 
 		//printf("%d\n", rands[i].contents);
 		
-		xCords[counter+i] = &temp->super;
+		xCords[counter] = &temp->super;
 
 		gf257_element_t* temp2 = malloc(sizeof(gf257_element_t));
 		gf257_init(temp2);
 		temp2->contents = hashed.contents;
-		yCords[counter+i] = &temp2->super;
+		yCords[counter] = &temp2->super;
+		counter++;
 
 	}
 
+	for(i = 0; i< counter; i++)
+	{
+		printf("(%d, %d)\n",((gf257_element_t*) xCords[i])->contents, ((gf257_element_t*) yCords[i])->contents);
+	}
+
+
 	poly_t* polynomial;
 
-	polynomial = interpolate(xCords, yCords, counter+i);
-	counter = counter+i;
+	polynomial = interpolate(xCords, yCords, counter);
+	//counter = counter+i;
 
 	//debugging code start
-	/*
+	
 	printf("One round polynomial: \n");
 	for(i = 0; i <= polynomial->degree; i++)
 	{
@@ -297,6 +270,7 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 	}
 	printf("\n");
 
+	/*
 	gf257_element_t* toEval = malloc(sizeof(gf257_element_t));
 	gf257_init(toEval);
 	gf257_element_t* result;
@@ -326,15 +300,15 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 	memcpy(out[0], &R.contents, bufsize);
 	outlen[0] += bufsize;
 
-	//WARNING: possible error with 255/256 numbers as contents,
-	//ask Dr. Pohly,
 	for(k = 0; k < (this->n); k++)
 	{
 		//load s and u
 		bufsize = buf_convert(&shadows[k], dumBuf);
 		memcpy(out[k] + outlen[k], dumBuf, bufsize);
 		outlen[k] += bufsize;
-		printf("%d\n", rands[k].contents);
+
+		//printf("%d\n", rands[k].contents);
+
 		bufsize = buf_convert(&rands[k], dumBuf);
 		memcpy(out[k] + outlen[k], dumBuf, bufsize);
 		outlen[k] += bufsize;
@@ -346,9 +320,11 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 	{
 		int ch = (j+1)%this->n;
 		//load evaluated points
-		printf("%d\n", rands[(this->n)+j].contents);
+		//printf("%d\n", rands[(this->n)+j].contents);
+
 		d = (gf257_element_t*) eval_poly(polynomial, (element_t*) &rands[(this->n)+j]);
-		printf("%d\n", d->contents);
+		
+		//printf("%d\n", d->contents);
 		//starting with channel 1 
 		bufsize = buf_convert(d, dumBuf);
 		memcpy(out[ch] + outlen[ch], dumBuf, bufsize);
@@ -420,20 +396,19 @@ static int ssalg_multi_split(struct ssalg *super, const uint8_t *buf, size_t len
 }
 
 //outlen keeps track of we are currently looking in shares
-static int one_recombine(const struct ssalg *super, uint8_t *buf, size_t bufloc, size_t len, size_t *inlen, struct ss_packet **shares)
+static size_t one_recombine(const struct ssalg_multi *this, uint8_t *buf, size_t bufloc, size_t len, size_t *inlen, struct ss_packet **shares)
 {
-
-	const struct ssalg_multi *this = (const struct ssalg_multi *) super;
 
 	gf257_element_t* xCords[len+(this->n)];
 	gf257_element_t* yCords[len+(this->n)];
 
 	gf257_element_t R;
 	gf257_init(&R);
-	inlen[0] += bytes_convert(&R, shares[0]->data[inlen[0]]);
+	inlen[0] += bytes_convert(&R, shares[0]->data+inlen[0]);
+	printf("R: %d\n", R.contents);
 
 
-	int i, j, counter;
+	int i, counter;
 	counter = 0; //index into x and y cords.
 
 
@@ -448,18 +423,22 @@ static int one_recombine(const struct ssalg *super, uint8_t *buf, size_t bufloc,
 		SHA1Init(&hash);
 		size_t numBytes;
 
-		//get the s and u, compute the shadow and load the points. 
-		numBytes = bytes_convert(&result, shares[i]->data[inlen[i]]);
-
-		//load the s
-		SHA1Update(&hash, shares[i]->data[inlen[i]], numBytes);
-		inlen[i] += numBytes;
-
+		//load the R
 		numBytes = buf_convert(&R, dumBuf);
 		SHA1Update(&hash, dumBuf, numBytes);
 
+		//get the s and u, compute the shadow and load the points. 
+		numBytes = bytes_convert(&result, shares[i]->data+inlen[i]);
+		buf_convert(&result, dumBuf);
+		printf("S%d: %d\n",i, result.contents);
+
+		//load the s
+		SHA1Update(&hash, dumBuf, numBytes);
+		//SHA1Update(&hash, shares[i]->data+inlen[i], numBytes);
+		inlen[i] += numBytes;
+
 		//load Ui into result
-		inlen[i] += bytes_convert(&result, shares[i]->data[inlen[i]]);
+		inlen[i] += bytes_convert(&result, shares[i]->data+inlen[i]);
 		xCords[counter] = malloc(sizeof(gf257_element_t));
 		gf257_init(xCords[counter]);
 		xCords[counter]->contents = result.contents;
@@ -481,24 +460,24 @@ static int one_recombine(const struct ssalg *super, uint8_t *buf, size_t bufloc,
 		counter++;
 	}
 
-	//recreate the pairs of ds and h(ds)
+	//recreate the pairs of Ds and h(Ds)
 	int uCheck, channel, d;
 	uCheck = 0;
-	d = 0; //d manages the gaps created by the fact ds and us cannot overlap
+	d = 0; //d manages the gaps created by the fact Ds and Us cannot overlap
 	// thus the d value will be i+len+d
 	for(i = 0; i < len; i++)
 	{
 		channel = (i+1)%(this->n);
 
-		//load d
+		//load D
 		xCords[counter] = malloc(sizeof(gf257_element_t));
 		gf257_init(xCords[counter]);
-		//make sure d not a u
+		//make sure D not a U
 		if((i+len+d)<xCords[uCheck]->contents)
 			xCords[counter]->contents = i+len+d;
 		else
 		{
-			//in case successive us
+			//in case successive Us
 			while((i+len+d)==xCords[uCheck]->contents)
 			{
 				d++;
@@ -509,7 +488,7 @@ static int one_recombine(const struct ssalg *super, uint8_t *buf, size_t bufloc,
 		
 
 		//load h(d)
-		inlen[channel] += bytes_convert(&result, shares[channel]->data[inlen[channel]]);
+		inlen[channel] += bytes_convert(&result, shares[channel]->data+inlen[channel]);
 		yCords[counter] = malloc(sizeof(gf257_element_t));
 		gf257_init(yCords[counter]);
 		yCords[counter]->contents = result.contents;
@@ -517,23 +496,35 @@ static int one_recombine(const struct ssalg *super, uint8_t *buf, size_t bufloc,
 		counter++;
 	}
 
+	for(i = 0; i< counter; i++)
+	{
+		printf("(%d, %d)\n",xCords[i]->contents, yCords[i]->contents);
+	}
+
 	poly_t* interpt;
 
 	interpt = interpolate((element_t**) xCords, (element_t**) yCords, len+(this->n));
 
-	/*
+	printf("One recombine polynomial: \n");
+	for(i = 0; i <= interpt->degree; i++)
+	{
+		printf("%dx^%d  ", ((gf257_element_t*)interpt->coeffs[i])->contents, i);
+	}
+	printf("\n");
+
 	//load the decoded secrets into buf
+	gf257_element_t* returned;
 	gf257_element_t* toEval = malloc(sizeof(gf257_element_t));
 	gf257_init(toEval);
 	for (i = 0; i < len; i++)
 	{
 		toEval->contents = i;
-		result = eval_poly(interpt, (element_t*) toEval);
+		returned = (gf257_element_t*) eval_poly(interpt, (element_t*) toEval);
+		bufloc += buf_convert(returned, buf + bufloc);
 	}
-	*/
 	
 
-	return 0;
+	return bufloc;
 }
 
 
@@ -556,11 +547,12 @@ static ssize_t ssalg_multi_recombine(struct ssalg *super, uint8_t *buf, size_t l
 		//length is the number of secrets involved in the next decoding round
 		length = len - offset < SECRETS? len-offset: SECRETS;
 
-		one_recombine(this, buf, bufloc, length, inlen, shares);
+		bufloc = one_recombine(this, buf, bufloc, length, inlen, shares);
 
 	}
 
-	return 0;
+
+	return bufloc;
 }
 
 

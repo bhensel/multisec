@@ -1,4 +1,4 @@
-CFLAGS= -ggdb -Wall -Wextra -std=c99 -Wno-unused-parameter
+CFLAGS= -ggdb -Wall -Wextra -std=c99 -Wno-unused-parameter -Wno-sign-compare
 
 test1: ssalg_multi.o remicss/ssalg.o remicss/hexdump.o fieldpoly/primeField.o sha1.o fieldpoly/fieldpoly.o fieldpoly/element.o
 
@@ -14,3 +14,4 @@ sha1.o: sha1.c sha1.h
 
 clean:
 	rm *.o
+	rm test1
