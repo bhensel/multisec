@@ -2,14 +2,15 @@
 #include "ssalg_multi.h"
 #include "remicss/ss.h"
 #include "remicss/hexdump.h"
+#define CHARCOUNT 11
 
 int main(int argc, char **argv)
 {
 	//132
 	//131 segfaults
-	srand(atoi(argv[1]));
+	//srand(atoi(argv[1]));
 
-	//srand(132);
+	srand(132);
 
 	struct ss_packet array[5];
 	//struct ss_packet *array = malloc(5 * sizeof(array[0]));
@@ -30,7 +31,7 @@ int main(int argc, char **argv)
 	//int many;
 	//for(many = 0; many <6; many++){
 		ssalg_multi_init(&tester, 5, 5);
-		ssalg_split(&tester.super, (uint8_t*) "pohly", 5, myArray);
+		ssalg_split(&tester.super, (uint8_t*) "Devin Pohly", CHARCOUNT, myArray);
 
 
 		for(i = 0; i < 5; i++) {
@@ -38,9 +39,9 @@ int main(int argc, char **argv)
 			hexdump(stderr, myArray[i]->data, myArray[i]->len);
 		}
 
-		uint8_t returnBuf[5];
+		uint8_t returnBuf[CHARCOUNT];
 		size_t returned;
-		returned = ssalg_recombine(&tester.super, returnBuf, 5, myArray);
+		returned = ssalg_recombine(&tester.super, returnBuf, CHARCOUNT, myArray);
 
 		printf("returned: \n");
 		hexdump(stderr, returnBuf, returned);

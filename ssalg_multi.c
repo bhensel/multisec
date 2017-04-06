@@ -250,11 +250,12 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 
 	}
 
+	/* debugging code, prints contents of arrays
 	for(i = 0; i< counter; i++)
 	{
 		printf("(%d, %d)\n",((gf257_element_t*) xCords[i])->contents, ((gf257_element_t*) yCords[i])->contents);
 	}
-
+	*/
 
 	poly_t* polynomial;
 
@@ -314,10 +315,11 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 		outlen[k] += bufsize;
 	}
 
-	gf257_element_t* d;
+	
 
 	for (j = 0; j < (len); j++)
 	{
+		gf257_element_t* d;
 		int ch = (j+1)%this->n;
 		//load evaluated points
 		//printf("%d\n", rands[(this->n)+j].contents);
@@ -329,7 +331,7 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 		bufsize = buf_convert(d, dumBuf);
 		memcpy(out[ch] + outlen[ch], dumBuf, bufsize);
 		outlen[ch] += bufsize;
-
+		free(d);
 	}
 
 	poly_free(polynomial);
@@ -343,7 +345,7 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 	//elements need to be freed first
 	free(xCords);
 	free(yCords);
-	free(d);
+	
 
 }
 
@@ -405,7 +407,6 @@ static size_t one_recombine(const struct ssalg_multi *this, uint8_t *buf, size_t
 	gf257_element_t R;
 	gf257_init(&R);
 	inlen[0] += bytes_convert(&R, shares[0]->data+inlen[0]);
-	printf("R: %d\n", R.contents);
 
 
 	int i, counter;
@@ -430,7 +431,6 @@ static size_t one_recombine(const struct ssalg_multi *this, uint8_t *buf, size_t
 		//get the s and u, compute the shadow and load the points. 
 		numBytes = bytes_convert(&result, shares[i]->data+inlen[i]);
 		buf_convert(&result, dumBuf);
-		printf("S%d: %d\n",i, result.contents);
 
 		//load the s
 		SHA1Update(&hash, dumBuf, numBytes);
@@ -496,10 +496,12 @@ static size_t one_recombine(const struct ssalg_multi *this, uint8_t *buf, size_t
 		counter++;
 	}
 
+	/* debugging code, prints the contents of the arrays
 	for(i = 0; i< counter; i++)
 	{
 		printf("(%d, %d)\n",xCords[i]->contents, yCords[i]->contents);
 	}
+	*/
 
 	poly_t* interpt;
 
@@ -513,16 +515,26 @@ static size_t one_recombine(const struct ssalg_multi *this, uint8_t *buf, size_t
 	printf("\n");
 
 	//load the decoded secrets into buf
-	gf257_element_t* returned;
+	
 	gf257_element_t* toEval = malloc(sizeof(gf257_element_t));
 	gf257_init(toEval);
 	for (i = 0; i < len; i++)
 	{
+		gf257_element_t* returned;
 		toEval->contents = i;
 		returned = (gf257_element_t*) eval_poly(interpt, (element_t*) toEval);
 		bufloc += buf_convert(returned, buf + bufloc);
+		free(returned);
 	}
 	
+	poly_free(interpt);
+	free(toEval);
+	for(i = 0; i< counter; i++)
+	{
+		free(xCords[i]);
+		free(yCords[i]);
+	}
+
 
 	return bufloc;
 }
