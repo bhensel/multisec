@@ -8,6 +8,7 @@
 #include "ssalg_multi.h"
 #include "fieldpoly/fieldpoly.h"
 #include "fieldpoly/primeField.h"
+#define DEBUG 0
 
 static const struct ssalg_ops ssalg_multi_ops;
 
@@ -160,14 +161,15 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 	check = 0;
 	for (dval = 0; dval < len; dval++)
 	{
-		if(dval + len < rands[check].contents)
+		if(dval + len +check < rands[check].contents)
 		{
 			gf257_init(&rands[(this->n)+dval]);
-			rands[(this->n)+dval].contents = dval+len;
+			rands[(this->n)+dval].contents = dval+len+check;
 		}
 		else
 		{
 			check++;
+			dval--;
 		}
 	}
 
@@ -238,7 +240,8 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 		gf257_init(temp);
 		temp->contents = rands[i].contents; //Ui
 
-		//printf("%d\n", rands[i].contents);
+		if(DEBUG)
+			printf("in (u, f(r,s)): %d, %d\n", rands[i].contents, hashed.contents);
 		
 		xCords[counter] = &temp->super;
 
@@ -251,43 +254,45 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 	}
 
 	/* debugging code, prints contents of arrays
-	for(i = 0; i< counter; i++)
-	{
-		printf("(%d, %d)\n",((gf257_element_t*) xCords[i])->contents, ((gf257_element_t*) yCords[i])->contents);
+	if(DEBUG){
+		for(i = 0; i< counter; i++)
+		{
+			printf("(%d, %d)\n",((gf257_element_t*) xCords[i])->contents, ((gf257_element_t*) yCords[i])->contents);
+		}
 	}
-	*/
-
+*/
 	poly_t* polynomial;
 
 	polynomial = interpolate(xCords, yCords, counter);
 	//counter = counter+i;
 
 	//debugging code start
+	if(DEBUG)
+	{
+		printf("One round polynomial: \n");
+		for(i = 0; i <= polynomial->degree; i++)
+		{
+			printf("%dx^%d  ", ((gf257_element_t*)polynomial->coeffs[i])->contents, i);
+		}
+		printf("\n");
 	
-	printf("One round polynomial: \n");
-	for(i = 0; i <= polynomial->degree; i++)
-	{
-		printf("%dx^%d  ", ((gf257_element_t*)polynomial->coeffs[i])->contents, i);
+		gf257_element_t* toEval = malloc(sizeof(gf257_element_t));
+		gf257_init(toEval);
+		gf257_element_t* result;
+
+		printf("Sanity check: \n");
+		for(i = 0; i < 5; i++)
+		{
+			toEval->contents = i;
+			result = (gf257_element_t*) eval_poly(polynomial, (element_t*) toEval);
+			printf("%c", result->contents);
+		}
+		printf("\n");
+		printf("\n");
+
+		free(toEval);
 	}
-	printf("\n");
 
-	/*
-	gf257_element_t* toEval = malloc(sizeof(gf257_element_t));
-	gf257_init(toEval);
-	gf257_element_t* result;
-
-	printf("Sanity check: \n");
-	for(i = 0; i < 5; i++)
-	{
-		toEval->contents = i;
-		result = (gf257_element_t*) eval_poly(polynomial, (element_t*) toEval);
-		printf("%c", result->contents);
-	}
-	printf("\n");
-	printf("\n");
-
-	free(toEval);
-	*/
 	//debugginh code stop
 
 
@@ -300,6 +305,11 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 	bufsize = buf_convert(&R, dumBuf);
 	memcpy(out[0], &R.contents, bufsize);
 	outlen[0] += bufsize;
+	//load the number of secrets in this round
+	memcpy(out[1], &len, 1);
+	outlen[1]++;
+
+
 
 	for(k = 0; k < (this->n); k++)
 	{
@@ -307,8 +317,6 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 		bufsize = buf_convert(&shadows[k], dumBuf);
 		memcpy(out[k] + outlen[k], dumBuf, bufsize);
 		outlen[k] += bufsize;
-
-		//printf("%d\n", rands[k].contents);
 
 		bufsize = buf_convert(&rands[k], dumBuf);
 		memcpy(out[k] + outlen[k], dumBuf, bufsize);
@@ -326,7 +334,8 @@ static void one_round(const struct ssalg_multi *this, const uint8_t *inbuf, size
 
 		d = (gf257_element_t*) eval_poly(polynomial, (element_t*) &rands[(this->n)+j]);
 		
-		//printf("%d\n", d->contents);
+		if(DEBUG)
+			printf("(d, h(d) (%d, %d)\n",rands[(this->n)+j].contents, d->contents);
 		//starting with channel 1 
 		bufsize = buf_convert(d, dumBuf);
 		memcpy(out[ch] + outlen[ch], dumBuf, bufsize);
@@ -391,21 +400,27 @@ static int ssalg_multi_split(struct ssalg *super, const uint8_t *buf, size_t len
 
 	}
 
-	for(i = 0; i<this->n; i++)
-		shares[i]->len = outlen[i];
+	//for(i = 0; i<this->n; i++)
+	//	shares[i]->len = outlen[i];
 
 	return 0;
 }
 
-//outlen keeps track of we are currently looking in shares
-static size_t one_recombine(const struct ssalg_multi *this, uint8_t *buf, size_t bufloc, size_t len, size_t *inlen, struct ss_packet **shares)
+//inlen keeps track of we are currently looking in shares
+static size_t one_recombine(const struct ssalg_multi *this, uint8_t *buf, size_t *inlen, struct ss_packet **shares)
 {
+	size_t len; //the number of secrets for this pass
+
+	len = shares[1]->data[inlen[1]];
+	inlen[1]++;
 
 	gf257_element_t* xCords[len+(this->n)];
 	gf257_element_t* yCords[len+(this->n)];
 
 	gf257_element_t R;
 	gf257_init(&R);
+
+
 	inlen[0] += bytes_convert(&R, shares[0]->data+inlen[0]);
 
 
@@ -430,12 +445,13 @@ static size_t one_recombine(const struct ssalg_multi *this, uint8_t *buf, size_t
 
 		//get the s and u, compute the shadow and load the points. 
 		numBytes = bytes_convert(&result, shares[i]->data+inlen[i]);
+		inlen[i] += numBytes;
 		buf_convert(&result, dumBuf);
 
 		//load the s
 		SHA1Update(&hash, dumBuf, numBytes);
 		//SHA1Update(&hash, shares[i]->data+inlen[i], numBytes);
-		inlen[i] += numBytes;
+
 
 		//load Ui into result
 		inlen[i] += bytes_convert(&result, shares[i]->data+inlen[i]);
@@ -456,6 +472,9 @@ static size_t one_recombine(const struct ssalg_multi *this, uint8_t *buf, size_t
 		yCords[counter] = malloc(sizeof(gf257_element_t));
 		gf257_init(yCords[counter]);
 		yCords[counter]->contents = hashed.contents;
+
+		if(DEBUG)
+			printf("(u, f(r,s): (%d, %d) \n", result.contents, hashed.contents);
 
 		counter++;
 	}
@@ -493,6 +512,9 @@ static size_t one_recombine(const struct ssalg_multi *this, uint8_t *buf, size_t
 		gf257_init(yCords[counter]);
 		yCords[counter]->contents = result.contents;
 
+		if(DEBUG)
+			printf("(d, h(d)): (%d, %d)\n",(i+len+d), result.contents );
+
 		counter++;
 	}
 
@@ -507,12 +529,15 @@ static size_t one_recombine(const struct ssalg_multi *this, uint8_t *buf, size_t
 
 	interpt = interpolate((element_t**) xCords, (element_t**) yCords, len+(this->n));
 
-	printf("One recombine polynomial: \n");
-	for(i = 0; i <= interpt->degree; i++)
-	{
-		printf("%dx^%d  ", ((gf257_element_t*)interpt->coeffs[i])->contents, i);
+	if(DEBUG){
+		printf("One recombine polynomial: \n");
+		for(i = 0; i <= interpt->degree; i++)
+		{
+			printf("%dx^%d  ", ((gf257_element_t*)interpt->coeffs[i])->contents, i);
+		}
+		printf("\n");
 	}
-	printf("\n");
+
 
 	//load the decoded secrets into buf
 	
@@ -523,7 +548,7 @@ static size_t one_recombine(const struct ssalg_multi *this, uint8_t *buf, size_t
 		gf257_element_t* returned;
 		toEval->contents = i;
 		returned = (gf257_element_t*) eval_poly(interpt, (element_t*) toEval);
-		bufloc += buf_convert(returned, buf + bufloc);
+		buf_convert(returned, buf + i);
 		free(returned);
 	}
 	
@@ -536,7 +561,7 @@ static size_t one_recombine(const struct ssalg_multi *this, uint8_t *buf, size_t
 	}
 
 
-	return bufloc;
+	return len;
 }
 
 
@@ -548,19 +573,19 @@ static ssize_t ssalg_multi_recombine(struct ssalg *super, uint8_t *buf, size_t l
 
 	int offset, i; 
 	size_t bufloc, length; //location in buf
-	size_t inlen[this->n]; //location on each channel
+	size_t inofs[this->n]; //location on each channel
 	bufloc = 0;
 
-	for(offset = 0; offset < len; offset+= SECRETS)
+	for(i = 0; i< this->n; i++)
+		inofs[i] = 0;
+
+	for(offset = 0; inofs[0] < shares[0]->len; offset+= SECRETS)
 	{
-		for(i = 0; i< this->n; i++)
-			inlen[i] = 0;
-
-		//length is the number of secrets involved in the next decoding round
-		length = len - offset < SECRETS? len-offset: SECRETS;
-
-		bufloc = one_recombine(this, buf, bufloc, length, inlen, shares);
-
+		bufloc += one_recombine(this, buf+offset, inofs, shares);
+		if(DEBUG){
+			printf("bufloc: %d, %d \n",bufloc, offset );
+			printf("inofs: %d, %d\n",inofs[0], shares[0]->len);
+		}
 	}
 
 

@@ -2,10 +2,12 @@
 #include "ssalg_multi.h"
 #include "remicss/ss.h"
 #include "remicss/hexdump.h"
-#define CHARCOUNT 11
+#include "string.h"
+#define CHARCOUNT 500
 
 int main(int argc, char **argv)
 {
+	//CHARCOUNT causes problems if greater than 88
 	//132
 	//131 segfaults
 	//srand(atoi(argv[1]));
@@ -27,11 +29,13 @@ int main(int argc, char **argv)
 
 	struct ssalg_multi tester;
 
+	uint8_t charBuf[CHARCOUNT];
+	memset(charBuf, 'x', CHARCOUNT);
 	
 	//int many;
 	//for(many = 0; many <6; many++){
 		ssalg_multi_init(&tester, 5, 5);
-		ssalg_split(&tester.super, (uint8_t*) "Devin Pohly", CHARCOUNT, myArray);
+		ssalg_split(&tester.super, charBuf, CHARCOUNT, myArray);
 
 
 		for(i = 0; i < 5; i++) {
